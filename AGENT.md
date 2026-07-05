@@ -34,6 +34,9 @@ sample.
 - `bubble_index/constants.py`: public data URLs and ticker lists
 - `logging.conf`: default logging configuration
 
+Default CLI settings use `--start 1986-01-01` and `--window-years 20`, so the
+report can annotate 2007 and later historical bubble-stage coordinates.
+
 ## Outputs
 
 The script writes:

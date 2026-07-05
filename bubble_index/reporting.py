@@ -14,6 +14,15 @@ from .factors import FACTORS, Factor
 
 logger = logging.getLogger(__name__)
 
+BUBBLE_STAGE_YEARS = (2007, 2018, 2020, 2021, 2022)
+BUBBLE_STAGE_NOTES = {
+    2007: "金融危机前夕",
+    2018: "紧缩/科技股回撤",
+    2020: "疫情冲击前",
+    2021: "成长股泡沫",
+    2022: "加息杀估值",
+}
+
 
 def risk_label(score: float) -> tuple[str, str]:
     if pd.isna(score):
@@ -47,18 +56,67 @@ def latest_complete_row(data: pd.DataFrame) -> pd.Series:
     return complete.iloc[-1]
 
 
-def svg_line_chart(data: pd.DataFrame, width: int = 920, height: int = 320) -> str:
-    series = data["bubble_score"].dropna().tail(2520)
+def find_stage_points(
+    series: pd.Series, years: tuple[int, ...] = BUBBLE_STAGE_YEARS
+) -> list[tuple[int, pd.Timestamp, float]]:
+    points = []
+    for year in years:
+        year_slice = series[series.index.year == year]
+        if year_slice.empty:
+            logger.warning("No bubble score available for chart annotation year: %s", year)
+            continue
+        point_date = year_slice.idxmax()
+        points.append((year, point_date, float(year_slice.loc[point_date])))
+    return points
+
+
+def nearest_index_position(index: pd.DatetimeIndex, target: pd.Timestamp) -> int:
+    position = int(index.searchsorted(target))
+    if position <= 0:
+        return 0
+    if position >= len(index):
+        return len(index) - 1
+    before = position - 1
+    after = position
+    if abs(index[after] - target) < abs(target - index[before]):
+        return after
+    return before
+
+
+def x_axis_ticks(series: pd.Series) -> list[tuple[int, str, str]]:
+    index = series.index
+    first = index[0]
+    last = index[-1]
+    ticks = [(0, first.strftime("%Y-%m"), "start")]
+    used_positions = {0}
+
+    target = first + pd.DateOffset(years=3)
+    while target < last:
+        position = nearest_index_position(index, target)
+        if position not in used_positions and position != len(index) - 1:
+            ticks.append((position, index[position].strftime("%Y"), "middle"))
+            used_positions.add(position)
+        target += pd.DateOffset(years=3)
+
+    ticks.append((len(index) - 1, last.strftime("%Y-%m-%d"), "end"))
+    return ticks
+
+
+def svg_line_chart(data: pd.DataFrame, width: int = 920, height: int = 440) -> str:
+    series = data["bubble_score"].dropna()
     if series.empty:
         return ""
 
-    pad_left, pad_top, pad_right, pad_bottom = 42, 18, 18, 34
+    pad_left, pad_top, pad_right, pad_bottom = 42, 28, 18, 124
     plot_w = width - pad_left - pad_right
     plot_h = height - pad_top - pad_bottom
+    plot_bottom = pad_top + plot_h
+    axis_y = plot_bottom + 8
     values = series.to_numpy()
     xs = np.linspace(pad_left, pad_left + plot_w, len(values))
     ys = pad_top + (100 - values) / 100 * plot_h
     points = " ".join(f"{x:.1f},{y:.1f}" for x, y in zip(xs, ys))
+    stage_points = find_stage_points(series)
 
     bands = [
         (85, 100, "#fee2e2"),
@@ -87,16 +145,71 @@ def svg_line_chart(data: pd.DataFrame, width: int = 920, height: int = 320) -> s
             f'<text x="10" y="{y + 4:.1f}" font-size="12" fill="#475569">{tick}</text>'
         )
 
-    start_label = series.index[0].strftime("%Y-%m")
-    end_label = series.index[-1].strftime("%Y-%m-%d")
+    x_axis = [
+        f'<line x1="{pad_left}" x2="{pad_left + plot_w}" y1="{axis_y:.1f}" y2="{axis_y:.1f}" '
+        'stroke="#94a3b8" stroke-width="1" />'
+    ]
+    for position, label, anchor_type in x_axis_ticks(series):
+        x = float(xs[position])
+        anchor = {"start": "start", "end": "end"}.get(anchor_type, "middle")
+        x_axis.append(
+            f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{axis_y:.1f}" y2="{axis_y + 5:.1f}" '
+            'stroke="#94a3b8" stroke-width="1" />'
+        )
+        x_axis.append(
+            f'<text x="{x:.1f}" y="{axis_y + 18:.1f}" text-anchor="{anchor}" '
+            f'font-size="11" fill="#475569">{html.escape(label)}</text>'
+        )
+
+    annotations = []
+    legend_items = []
+    for idx, (year, point_date, score) in enumerate(stage_points):
+        point_idx = series.index.get_loc(point_date)
+        x = float(xs[point_idx])
+        y = pad_top + (100 - score) / 100 * plot_h
+        label_x = min(max(x, pad_left + 28), pad_left + plot_w - 28)
+        label_y = pad_top + 14 + (idx % 3) * 15
+        label = f"{year} {score:.1f}"
+        date_label = point_date.strftime("%Y-%m-%d")
+        note = BUBBLE_STAGE_NOTES.get(year)
+        note_label = f"（{note}）" if note else ""
+        legend_items.append(f"{year}{note_label}: {date_label} / {score:.1f}")
+        annotations.append(
+            f"""
+  <g class="stage-marker">
+    <title>{year}{note_label} stage coordinate: {date_label}, {score:.1f}</title>
+    <line x1="{x:.1f}" x2="{x:.1f}" y1="{pad_top}" y2="{pad_top + plot_h}"
+      stroke="#64748b" stroke-width="1" stroke-dasharray="3 4" opacity="0.45" />
+    <line x1="{label_x:.1f}" y1="{label_y + 4:.1f}" x2="{x:.1f}" y2="{y - 7:.1f}"
+      stroke="#475569" stroke-width="1" opacity="0.65" />
+    <circle cx="{x:.1f}" cy="{y:.1f}" r="4.4" fill="#0f172a" stroke="white" stroke-width="1.6" />
+    <text x="{label_x:.1f}" y="{label_y:.1f}" text-anchor="middle"
+      font-size="11" font-weight="700" fill="#0f172a">{label}</text>
+  </g>
+"""
+        )
+
+    legend = []
+    if legend_items:
+        legend_lines = [
+            " · ".join(legend_items[start : start + 2])
+            for start in range(0, len(legend_items), 2)
+        ]
+        for idx, line in enumerate(legend_lines):
+            prefix = "阶段峰值坐标：" if idx == 0 else ""
+            legend.append(
+                f'<text x="{pad_left}" y="{axis_y + 46 + idx * 16}" font-size="11" fill="#334155">'
+                f'{prefix}{html.escape(line)}</text>'
+            )
     return f"""
 <svg viewBox="0 0 {width} {height}" role="img" aria-label="Bubble score history">
   <rect width="{width}" height="{height}" fill="white" />
   {''.join(rects)}
   {''.join(grid)}
   <polyline points="{points}" fill="none" stroke="#2563eb" stroke-width="3" />
-  <text x="{pad_left}" y="{height - 10}" font-size="12" fill="#475569">{start_label}</text>
-  <text x="{width - 110}" y="{height - 10}" font-size="12" fill="#475569">{end_label}</text>
+  {''.join(annotations)}
+  {''.join(x_axis)}
+  {''.join(legend)}
 </svg>
 """
 

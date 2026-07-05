@@ -17,12 +17,12 @@ logger = logging.getLogger(__name__)
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Calculate a free-data Nasdaq bubble index.")
-    parser.add_argument("--start", default="2006-01-01", help="Start date, YYYY-MM-DD.")
+    parser.add_argument("--start", default="1986-01-01", help="Start date, YYYY-MM-DD.")
     parser.add_argument("--out", default="output", help="Output directory.")
     parser.add_argument(
         "--window-years",
         type=int,
-        default=10,
+        default=20,
         help="Rolling percentile window in trading years.",
     )
     parser.add_argument(

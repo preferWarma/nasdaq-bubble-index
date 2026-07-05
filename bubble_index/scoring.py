@@ -33,7 +33,7 @@ def first_existing_column(data: pd.DataFrame, names: tuple[str, ...]) -> str | N
     return next((name for name in names if name in data.columns), None)
 
 
-def compute_scores(frame: pd.DataFrame, window_years: int = 10) -> pd.DataFrame:
+def compute_scores(frame: pd.DataFrame, window_years: int = 20) -> pd.DataFrame:
     logger.info("Computing factor scores")
     data = frame.copy().sort_index()
     window = int(window_years * 252)
