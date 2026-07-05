@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+.venv/
+
+# Generated reports and data exports
+output/
+output_*/
+
+# macOS
+.DS_Store
