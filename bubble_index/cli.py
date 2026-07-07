@@ -12,6 +12,11 @@ from .factors import default_factor_weights_path, load_factors
 from .logging_config import configure_logging, default_log_config_path
 from .reporting import write_outputs
 from .scoring import compute_scores
+from .weight_optimization import (
+    WeightOptimizationConfig,
+    optimize_factor_weights,
+    write_weight_optimization_outputs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +73,53 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"),
         help="Override the configured logging level.",
     )
+    parser.add_argument(
+        "--optimize-weights",
+        action="store_true",
+        help="Run random search plus walk-forward validation for the 6 group weights.",
+    )
+    parser.add_argument(
+        "--weight-search-trials",
+        type=int,
+        default=2000,
+        help="Number of random weight candidates to evaluate when optimizing.",
+    )
+    parser.add_argument(
+        "--weight-search-seed",
+        type=int,
+        default=42,
+        help="Random seed for weight optimization.",
+    )
+    parser.add_argument(
+        "--wf-train-years",
+        type=int,
+        default=10,
+        help="Walk-forward training window length in years.",
+    )
+    parser.add_argument(
+        "--wf-validation-years",
+        type=int,
+        default=3,
+        help="Walk-forward validation window length in years.",
+    )
+    parser.add_argument(
+        "--wf-step-years",
+        type=int,
+        default=1,
+        help="Walk-forward window step length in years.",
+    )
+    parser.add_argument(
+        "--weight-min",
+        type=float,
+        default=0.03,
+        help="Minimum allowed weight for each factor group during optimization.",
+    )
+    parser.add_argument(
+        "--weight-max",
+        type=float,
+        default=0.40,
+        help="Maximum allowed weight for each factor group during optimization.",
+    )
     return parser.parse_args(argv)
 
 
@@ -104,6 +156,22 @@ def main(argv: list[str] | None = None) -> None:
     paths = write_outputs(scored, Path(args.out), factors=factors)
     summary = json.loads(paths["latest"].read_text(encoding="utf-8"))
 
+    optimization_paths = {}
+    if args.optimize_weights:
+        optimization_config = WeightOptimizationConfig(
+            trials=args.weight_search_trials,
+            seed=args.weight_search_seed,
+            train_years=args.wf_train_years,
+            validation_years=args.wf_validation_years,
+            step_years=args.wf_step_years,
+            min_weight=args.weight_min,
+            max_weight=args.weight_max,
+        )
+        optimization = optimize_factor_weights(scored, factors, optimization_config)
+        optimization_paths = write_weight_optimization_outputs(optimization, Path(args.out))
+        recommended_weights = optimization["recommended"]["weights"]
+        logger.info("Recommended optimized weights: %s", recommended_weights)
+
     logger.info(
         "Run complete: score=%s, label=%s, data_date=%s",
         summary["bubble_score"],
@@ -114,4 +182,6 @@ def main(argv: list[str] | None = None) -> None:
     print(f"Nasdaq bubble score: {summary['bubble_score']} ({summary['risk_label']})")
     print(f"Data date: {summary['date']}")
     for name, path in paths.items():
+        print(f"{name}: {path}")
+    for name, path in optimization_paths.items():
         print(f"{name}: {path}")

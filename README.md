@@ -29,12 +29,12 @@ python nasdaq_bubble_index.py --factor-weights config/factor_weights.json
 
 ```json
 {
-  "valuation": 0.25,
-  "trend_momentum": 0.20,
-  "style_crowding": 0.15,
-  "concentration": 0.15,
-  "sentiment_speculation": 0.15,
-  "macro_fragility": 0.10
+  "valuation": 0.21075,
+  "trend_momentum": 0.062113,
+  "style_crowding": 0.140026,
+  "concentration": 0.253531,
+  "sentiment_speculation": 0.067672,
+  "macro_fragility": 0.265908
 }
 ```
 
@@ -76,12 +76,12 @@ python nasdaq_bubble_index.py --offline-sample
 
 | 因子 | 配置 key | 默认权重 | 说明 |
 |---|---|---:|---|
-| 估值水平 | `valuation` | 25% | 优先用 PE/PS；没有时用 Nasdaq/GDP 和 Nasdaq/M2 代理 |
-| 趋势动量过热 | `trend_momentum` | 20% | 价格偏离 200 日均线和过去一年涨幅的均值 |
-| 成长风格拥挤 | `style_crowding` | 15% | 优先用 QQQ/SPY 一年强弱；缺失时回退到 Nasdaq/S&P 500 |
-| 龙头集中度 | `concentration` | 15% | 优先用 top10 权重；没有时用巨头篮子相对 QQQ 的强弱代理 |
-| 情绪投机 | `sentiment_speculation` | 15% | 投机代理指标和低波动自满程度的均值 |
-| 宏观/杠杆脆弱性 | `macro_fragility` | 10% | 10 年期美债、M2 同比和融资杠杆增速的均值 |
+| 估值水平 | `valuation` | 21.1% | 优先用 PE/PS；没有时用 Nasdaq/GDP 和 Nasdaq/M2 代理 |
+| 趋势动量过热 | `trend_momentum` | 6.2% | 价格偏离 200 日均线和过去一年涨幅的均值 |
+| 成长风格拥挤 | `style_crowding` | 14.0% | 优先用 QQQ/SPY 一年强弱；缺失时回退到 Nasdaq/S&P 500 |
+| 龙头集中度 | `concentration` | 25.4% | 优先用 top10 权重；没有时用巨头篮子相对 QQQ 的强弱代理 |
+| 情绪投机 | `sentiment_speculation` | 6.8% | 投机代理指标和低波动自满程度的均值 |
+| 宏观/杠杆脆弱性 | `macro_fragility` | 26.6% | 10 年期美债、M2 同比和融资杠杆增速的均值 |
 
 所有底层单因子都先转成 20 年滚动历史分位数，再按分组聚合，最后按分组权重合成。若某个数据源缺失，工具会自动用剩余可用分组重新归一化权重。
 
@@ -93,6 +93,31 @@ python nasdaq_bubble_index.py --offline-sample
 - Top 10% 高分月份的平均后续最大回撤
 - 75 分以上和 85 分以上样本的后续大跌命中率
 - 2000、2007、2018、2020、2021、2022 等历史阶段的峰值分数和后续回撤
+
+## 权重优化
+
+可以显式运行随机搜索 + walk-forward 验证，在 6 组因子权重上寻找更稳健的组合：
+
+```bash
+python nasdaq_bubble_index.py \
+  --optimize-weights \
+  --weight-search-trials 3000 \
+  --weight-search-seed 42
+```
+
+优化目标由几部分组成：分数与未来 3 年最大回撤严重程度的相关性、秩相关性、Top 10% 高分月份的后续回撤溢价、Top 10% 高分月份触发 25% 以上回撤的比例，以及 2000、2007、2018、2020、2021、2022 等经典阶段的识别稳定性。
+
+输出文件会额外包含：
+
+- `weight_optimization.json`：完整搜索配置、walk-forward 每折结果、基线和推荐权重表现
+- `optimized_factor_weights.json`：可直接传给 `--factor-weights` 的推荐权重配置
+- `weight_optimization_top_candidates.csv`：全历史目标下排名靠前的候选权重
+
+例如使用优化后的权重重新生成报告：
+
+```bash
+python nasdaq_bubble_index.py --factor-weights output/optimized_factor_weights.json
+```
 
 ## 注意
 

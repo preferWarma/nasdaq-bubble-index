@@ -1,8 +1,8 @@
 {
-  "valuation": 0.25,
-  "trend_momentum": 0.20,
-  "style_crowding": 0.15,
-  "concentration": 0.15,
-  "sentiment_speculation": 0.15,
-  "macro_fragility": 0.10
+  "valuation": 0.21075,
+  "trend_momentum": 0.062113,
+  "style_crowding": 0.140026,
+  "concentration": 0.253531,
+  "sentiment_speculation": 0.067672,
+  "macro_fragility": 0.265908
 }
