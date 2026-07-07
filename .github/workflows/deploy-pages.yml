@@ -1,6 +1,9 @@
 name: Publish Nasdaq Bubble Report
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
   schedule:
     - cron: "30 22 * * 1-5"
