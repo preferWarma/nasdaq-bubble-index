@@ -2,22 +2,31 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+import logging
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Callable
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class Factor:
     key: str
     name: str
-    weight: float
     raw_column: str
     score_column: str
     value_formatter: Callable[[float], str]
     hot_text: str
     warm_text: str
     cool_text: str
+    weight: float = 0.0
+
+    def with_weight(self, weight: float) -> "Factor":
+        return replace(self, weight=weight)
 
 
 def fmt_pct(value: float) -> str:
@@ -28,15 +37,14 @@ def fmt_number(value: float) -> str:
     return "NA" if pd.isna(value) else f"{value:,.2f}"
 
 
-def fmt_yield(value: float) -> str:
-    return "NA" if pd.isna(value) else f"{value:.2f}%"
+def fmt_score(value: float) -> str:
+    return "NA" if pd.isna(value) else f"{value:.1f} 分"
 
 
-FACTORS = [
+FACTOR_TEMPLATES = [
     Factor(
         key="valuation",
         name="估值水平",
-        weight=0.16,
         raw_column="valuation_proxy",
         score_column="valuation_score",
         value_formatter=fmt_number,
@@ -45,53 +53,28 @@ FACTORS = [
         cool_text="估值或估值代理指标不极端，估值泡沫压力较低。",
     ),
     Factor(
-        key="trend",
-        name="价格偏离长期均线",
-        weight=0.13,
-        raw_column="trend_deviation",
-        score_column="trend_score",
-        value_formatter=fmt_pct,
-        hot_text="价格显著高于 200 日均线，趋势过热信号偏强。",
-        warm_text="价格高于长期均线，趋势偏热但还不是极端状态。",
-        cool_text="价格相对长期均线不拥挤，趋势泡沫压力较低。",
+        key="trend_momentum",
+        name="趋势动量过热",
+        raw_column="trend_momentum_proxy",
+        score_column="trend_momentum_score",
+        value_formatter=fmt_score,
+        hot_text="均线偏离和过去一年涨幅共同处于高分位，趋势交易较拥挤。",
+        warm_text="趋势动量偏强，市场预期和追涨交易已有升温。",
+        cool_text="趋势动量不极端，价格过热压力较低。",
     ),
     Factor(
-        key="return_1y",
-        name="过去一年涨幅",
-        weight=0.10,
-        raw_column="nasdaq_1y_return",
-        score_column="return_score",
+        key="style_crowding",
+        name="成长风格拥挤",
+        raw_column="style_crowding_proxy",
+        score_column="style_crowding_score",
         value_formatter=fmt_pct,
-        hot_text="过去一年涨幅处于历史高分位，追涨情绪值得警惕。",
-        warm_text="过去一年收益偏强，市场预期已经不低。",
-        cool_text="过去一年涨幅不极端，动量风险较低。",
-    ),
-    Factor(
-        key="relative_strength",
-        name="纳指相对标普强弱",
-        weight=0.08,
-        raw_column="relative_strength_1y",
-        score_column="relative_score",
-        value_formatter=fmt_pct,
-        hot_text="Nasdaq 相对 S&P 500 大幅跑赢，科技成长风格较拥挤。",
-        warm_text="Nasdaq 相对大盘偏强，成长风格有一定拥挤度。",
-        cool_text="Nasdaq 相对大盘没有明显过热。",
-    ),
-    Factor(
-        key="qqq_spy_long",
-        name="QQQ/SPY 长历史强弱",
-        weight=0.10,
-        raw_column="qqq_spy_1y",
-        score_column="qqq_spy_score",
-        value_formatter=fmt_pct,
-        hot_text="QQQ 相对 SPY 的一年强弱处于高分位，成长风格相对大盘明显拥挤。",
-        warm_text="QQQ 相对 SPY 偏强，科技成长风格已有一定溢价。",
-        cool_text="QQQ 相对 SPY 不极端，风格拥挤度较低。",
+        hot_text="成长风格相对大盘明显跑赢，科技成长配置拥挤度偏高。",
+        warm_text="成长风格相对偏强，风格溢价已有一定积累。",
+        cool_text="成长风格相对强弱不极端，风格拥挤度较低。",
     ),
     Factor(
         key="concentration",
         name="龙头集中度",
-        weight=0.10,
         raw_column="concentration_proxy",
         score_column="concentration_score",
         value_formatter=fmt_pct,
@@ -100,58 +83,70 @@ FACTORS = [
         cool_text="龙头集中度压力不高，市场结构相对均衡。",
     ),
     Factor(
-        key="speculation",
-        name="投机情绪",
-        weight=0.10,
-        raw_column="speculation_proxy",
-        score_column="speculation_score",
-        value_formatter=fmt_number,
-        hot_text="期权或投机代理指标处于高分位，短期追涨资金较活跃。",
-        warm_text="投机情绪偏热，需要留意追涨拥挤。",
-        cool_text="投机情绪不极端，短线泡沫压力较低。",
+        key="sentiment_speculation",
+        name="情绪投机",
+        raw_column="sentiment_speculation_proxy",
+        score_column="sentiment_speculation_score",
+        value_formatter=fmt_score,
+        hot_text="投机代理指标和低波动自满信号偏热，短期追涨资金较活跃。",
+        warm_text="情绪投机因子偏热，需要留意追涨拥挤和风险定价过低。",
+        cool_text="情绪投机信号不极端，短线泡沫压力较低。",
     ),
     Factor(
-        key="complacency",
-        name="低波动自满程度",
-        weight=0.07,
-        raw_column="vix",
-        score_column="complacency_score",
-        value_formatter=fmt_number,
-        hot_text="VIX 处于较低历史分位，市场可能存在乐观或自满情绪。",
-        warm_text="波动率不高，风险定价偏平静。",
-        cool_text="波动率不低，市场没有明显自满。",
-    ),
-    Factor(
-        key="rate_pressure",
-        name="利率压力",
-        weight=0.06,
-        raw_column="dgs10",
-        score_column="rate_pressure_score",
-        value_formatter=fmt_yield,
-        hot_text="10 年期美债收益率处于高分位，高估值资产的折现压力较强。",
-        warm_text="利率水平偏高，对长久期成长资产有一定约束。",
-        cool_text="利率压力不高，对估值的压制较弱。",
-    ),
-    Factor(
-        key="liquidity",
-        name="M2 流动性增速",
-        weight=0.04,
-        raw_column="m2_yoy",
-        score_column="liquidity_score",
-        value_formatter=fmt_pct,
-        hot_text="M2 同比增速处于高分位，流动性对风险资产较友好。",
-        warm_text="M2 增速偏高，流动性环境有一定支撑。",
-        cool_text="M2 增速不高，流动性泡沫助推较弱。",
-    ),
-    Factor(
-        key="margin",
-        name="融资杠杆增速",
-        weight=0.06,
-        raw_column="margin_debt_yoy",
-        score_column="margin_score",
-        value_formatter=fmt_pct,
-        hot_text="FINRA 融资余额同比增速处于高分位，杠杆追涨风险上升。",
-        warm_text="融资余额同比偏强，杠杆资金有一定升温。",
-        cool_text="融资余额同比不高，杠杆泡沫压力较低。",
+        key="macro_fragility",
+        name="宏观/杠杆脆弱性",
+        raw_column="macro_fragility_proxy",
+        score_column="macro_fragility_score",
+        value_formatter=fmt_score,
+        hot_text="利率、流动性或融资杠杆信号显示市场脆弱性偏高。",
+        warm_text="宏观和杠杆环境对高估值资产有一定约束。",
+        cool_text="宏观和杠杆脆弱性不高，对泡沫的助推或刺破压力较弱。",
     ),
 ]
+
+
+def default_factor_weights_path() -> Path:
+    return Path(__file__).resolve().parents[1] / "config" / "factor_weights.json"
+
+
+def load_factor_weights(path: str | Path | None = None) -> dict[str, float]:
+    weights_path = Path(path) if path else default_factor_weights_path()
+    logger.info("Loading factor weights: %s", weights_path)
+    payload = json.loads(weights_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"Factor weights config must be a JSON object: {weights_path}")
+    raw_weights = payload.get("weights", payload)
+    if not isinstance(raw_weights, dict):
+        raise ValueError(f"Factor weights config must contain a weights object: {weights_path}")
+
+    definition_keys = {factor.key for factor in FACTOR_TEMPLATES}
+    configured_keys = set(raw_weights)
+    missing = sorted(definition_keys - configured_keys)
+    unknown = sorted(configured_keys - definition_keys)
+    if missing:
+        raise ValueError(f"Factor weights config missing keys: {', '.join(missing)}")
+    if unknown:
+        raise ValueError(f"Factor weights config has unknown keys: {', '.join(unknown)}")
+
+    weights = {}
+    for key, value in raw_weights.items():
+        try:
+            weight = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Factor weight must be numeric for {key}: {value}") from exc
+        if weight < 0:
+            raise ValueError(f"Factor weight must be non-negative for {key}: {weight}")
+        weights[key] = weight
+
+    total_weight = sum(weights.values())
+    if total_weight <= 0:
+        raise ValueError("At least one factor weight must be positive")
+    return weights
+
+
+def build_factors(weights: dict[str, float]) -> list[Factor]:
+    return [factor.with_weight(weights[factor.key]) for factor in FACTOR_TEMPLATES]
+
+
+def load_factors(path: str | Path | None = None) -> list[Factor]:
+    return build_factors(load_factor_weights(path))

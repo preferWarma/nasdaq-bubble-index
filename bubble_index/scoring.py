@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from .constants import MEGA_CAP_TICKERS
-from .factors import FACTORS
+from .factors import Factor
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,48 @@ def first_existing_column(data: pd.DataFrame, names: tuple[str, ...]) -> str | N
     return next((name for name in names if name in data.columns), None)
 
 
-def compute_scores(frame: pd.DataFrame, window_years: int = 20) -> pd.DataFrame:
+def mean_existing_columns(data: pd.DataFrame, columns: tuple[str, ...]) -> pd.Series:
+    existing = [column for column in columns if column in data.columns]
+    if not existing:
+        return pd.Series(np.nan, index=data.index)
+    return data[existing].mean(axis=1)
+
+
+def first_available_series(data: pd.DataFrame, columns: tuple[str, ...]) -> pd.Series:
+    existing = [column for column in columns if column in data.columns]
+    if not existing:
+        return pd.Series(np.nan, index=data.index)
+    series = data[existing[0]]
+    for column in existing[1:]:
+        series = series.combine_first(data[column])
+    return series
+
+
+def weighted_factor_score(
+    data: pd.DataFrame, factors: list[Factor]
+) -> tuple[pd.Series, pd.Series]:
+    score_cols = [factor.score_column for factor in factors if factor.score_column in data.columns]
+    logger.debug("Available score columns: %s", score_cols)
+    weighted_sum = pd.Series(0.0, index=data.index)
+    active_weight = pd.Series(0.0, index=data.index)
+    for factor in factors:
+        if factor.score_column not in data.columns:
+            continue
+        available = data[factor.score_column].notna()
+        weighted_sum = weighted_sum + data[factor.score_column].fillna(0) * factor.weight
+        active_weight = active_weight + available.astype(float) * factor.weight
+
+    score = pd.Series(np.nan, index=data.index)
+    score.loc[active_weight > 0] = weighted_sum.loc[active_weight > 0] / active_weight.loc[
+        active_weight > 0
+    ]
+    active_factor_count = data[score_cols].notna().sum(axis=1) if score_cols else pd.Series(0, index=data.index)
+    return score, active_factor_count
+
+
+def compute_scores(
+    frame: pd.DataFrame, factors: list[Factor], window_years: int = 20
+) -> pd.DataFrame:
     logger.info("Computing factor scores")
     data = frame.copy().sort_index()
     window = int(window_years * 252)
@@ -170,26 +211,31 @@ def compute_scores(frame: pd.DataFrame, window_years: int = 20) -> pd.DataFrame:
     if "margin_debt_yoy" in data.columns:
         data["margin_score"] = rolling_percentile(data["margin_debt_yoy"], window, min_periods)
 
-    score_cols = [factor.score_column for factor in FACTORS if factor.score_column in data.columns]
-    logger.debug("Available score columns: %s", score_cols)
-    weighted_sum = pd.Series(0.0, index=data.index)
-    active_weight = pd.Series(0.0, index=data.index)
-    for factor in FACTORS:
-        if factor.score_column not in data.columns:
-            continue
-        available = data[factor.score_column].notna()
-        weighted_sum = weighted_sum + data[factor.score_column].fillna(0) * factor.weight
-        active_weight = active_weight + available.astype(float) * factor.weight
+    data["trend_momentum_score"] = mean_existing_columns(data, ("trend_score", "return_score"))
+    data["trend_momentum_proxy"] = data["trend_momentum_score"]
+    data["style_crowding_score"] = first_available_series(
+        data, ("qqq_spy_score", "relative_score")
+    )
+    data["style_crowding_proxy"] = first_available_series(
+        data, ("qqq_spy_1y", "relative_strength_1y")
+    )
+    data["sentiment_speculation_score"] = mean_existing_columns(
+        data, ("speculation_score", "complacency_score")
+    )
+    data["sentiment_speculation_proxy"] = data["sentiment_speculation_score"]
+    data["macro_fragility_score"] = mean_existing_columns(
+        data, ("rate_pressure_score", "liquidity_score", "margin_score")
+    )
+    data["macro_fragility_proxy"] = data["macro_fragility_score"]
 
-    data["bubble_score"] = np.where(active_weight > 0, weighted_sum / active_weight, np.nan)
-    data["active_factor_count"] = data[score_cols].notna().sum(axis=1)
+    data["bubble_score"], data["active_factor_count"] = weighted_factor_score(data, factors)
     latest_scores = data.dropna(subset=["bubble_score"])
     if latest_scores.empty:
         logger.warning("Score calculation complete, but no complete bubble score is available")
     else:
         latest = latest_scores.iloc[-1]
         logger.info(
-            "Score calculation complete: latest_date=%s, score=%.1f, active_factors=%d",
+            "Score calculation complete: latest_date=%s, score=%.1f, active_groups=%d",
             latest.name.strftime("%Y-%m-%d"),
             float(latest["bubble_score"]),
             int(latest["active_factor_count"]),

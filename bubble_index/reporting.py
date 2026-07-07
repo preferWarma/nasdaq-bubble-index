@@ -10,7 +10,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .factors import FACTORS, Factor
+from .backtesting import build_backtest_summary
+from .factors import Factor
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +139,18 @@ def format_signed_percent(value: float | None) -> str:
     if value is None or pd.isna(value):
         return "NA"
     return f"{value * 100:+.1f}%"
+
+
+def format_plain_percent(value: float | None) -> str:
+    if value is None or pd.isna(value):
+        return "NA"
+    return f"{value * 100:.1f}%"
+
+
+def format_decimal(value: float | None, digits: int = 2) -> str:
+    if value is None or pd.isna(value):
+        return "NA"
+    return f"{value:.{digits}f}"
 
 
 def scaled_index_series(data: pd.DataFrame, primary_col: str, proxy_col: str) -> pd.Series:
@@ -312,6 +325,89 @@ def render_reference_section(data: pd.DataFrame) -> str:
         {''.join(card_markup)}
       </div>
       <div class="reference-note">参照含义：分数接近历史泡沫阶段时，需要重点关注后续大幅回撤风险。</div>
+    </section>
+"""
+
+
+def render_backtest_section(backtest_summary: dict[str, object] | None) -> str:
+    if not backtest_summary:
+        return ""
+
+    model = backtest_summary.get("model")
+    if not isinstance(model, dict):
+        return ""
+
+    top_decile = model.get("top_decile", {})
+    score_ge_75 = model.get("score_ge_75", {})
+    if not isinstance(top_decile, dict):
+        top_decile = {}
+    if not isinstance(score_ge_75, dict):
+        score_ge_75 = {}
+    model_card = f"""
+      <section class="backtest-card">
+        <div class="backtest-card-title">{html.escape(str(model.get("label", "模型")))}</div>
+        <div class="backtest-metrics">
+          <div>
+            <span>相关性</span>
+            <strong>{format_decimal(model.get("score_to_future_drawdown_severity_corr"), 2)}</strong>
+          </div>
+          <div>
+            <span>Top 10% 后续回撤</span>
+            <strong>{format_signed_percent(top_decile.get("avg_future_max_drawdown"))}</strong>
+          </div>
+          <div>
+            <span>Top 10% 大跌命中率</span>
+            <strong>{format_plain_percent(top_decile.get("hit_rate_25pct_drawdown"))}</strong>
+          </div>
+          <div>
+            <span>75分以上样本</span>
+            <strong>{score_ge_75.get("count", 0)}</strong>
+          </div>
+        </div>
+      </section>
+"""
+
+    stage_rows = []
+    for stage in model.get("stage_peaks", []):
+        if not isinstance(stage, dict):
+            continue
+        stage_rows.append(
+            f"""
+        <tr>
+          <td>{stage.get("year", "")}</td>
+          <td>{html.escape(str(stage.get("label", "")))}</td>
+          <td>{html.escape(str(stage.get("peak_date", "")))}</td>
+          <td>{format_decimal(stage.get("score"), 1)}</td>
+          <td>{format_signed_percent(stage.get("future_max_drawdown"))}</td>
+        </tr>
+"""
+        )
+
+    stage_table = ""
+    if stage_rows:
+        stage_table = f"""
+      <div class="backtest-table-wrap">
+        <table class="backtest-table">
+          <thead>
+            <tr>
+              <th>年份</th>
+              <th>说明</th>
+              <th>分组方案峰值日</th>
+              <th>峰值分数</th>
+              <th>后续3年最大回撤</th>
+            </tr>
+          </thead>
+          <tbody>{''.join(stage_rows)}</tbody>
+        </table>
+      </div>
+"""
+
+    return f"""
+    <section class="backtest-section">
+      <div class="section-title">回测摘要</div>
+      <div class="section-subtitle">月度样本，观察分数与未来 {backtest_summary.get("future_window_years", 3)} 年 Nasdaq 最大回撤的关系</div>
+      <div class="backtest-grid">{model_card}</div>
+      {stage_table}
     </section>
 """
 
@@ -571,19 +667,20 @@ def svg_index_chart(data: pd.DataFrame, width: int = 920, height: int = 520) -> 
 """
 
 
-def build_summary(latest: pd.Series) -> dict[str, object]:
+def build_summary(latest: pd.Series, factors: list[Factor]) -> dict[str, object]:
     logger.debug("Building summary for %s", latest.name)
     label, color = risk_label(float(latest["bubble_score"]))
-    factors = []
-    for factor in FACTORS:
+    factor_items = []
+    for factor in factors:
         if factor.score_column not in latest.index:
             continue
         raw = latest.get(factor.raw_column, np.nan)
         score = latest.get(factor.score_column, np.nan)
-        factors.append(
+        factor_items.append(
             {
                 "key": factor.key,
                 "name": factor.name,
+                "weight": factor.weight,
                 "raw_value": None if pd.isna(raw) else float(raw),
                 "display_value": factor.value_formatter(raw),
                 "score": None if pd.isna(score) else round(float(score), 1),
@@ -596,11 +693,15 @@ def build_summary(latest: pd.Series) -> dict[str, object]:
         "risk_label": label,
         "risk_color": color,
         "active_factor_count": int(latest["active_factor_count"]),
-        "factors": factors,
+        "factors": factor_items,
     }
 
 
-def render_html_report(data: pd.DataFrame, summary: dict[str, object]) -> str:
+def render_html_report(
+    data: pd.DataFrame,
+    summary: dict[str, object],
+    backtest_summary: dict[str, object] | None = None,
+) -> str:
     logger.debug("Rendering HTML report for %s", summary["date"])
     score = summary["bubble_score"]
     color = summary["risk_color"]
@@ -608,6 +709,7 @@ def render_html_report(data: pd.DataFrame, summary: dict[str, object]) -> str:
     gauge = svg_score_gauge(float(score), str(color))
     previous_caption = previous_score_caption(data)
     reference_section = render_reference_section(data)
+    backtest_section = render_backtest_section(backtest_summary)
     factor_cards = []
     for idx, factor in enumerate(summary["factors"], start=1):
         score_value = factor["score"]
@@ -617,6 +719,7 @@ def render_html_report(data: pd.DataFrame, summary: dict[str, object]) -> str:
       <section class="factor">
         <div class="factor-title">特征 {idx} · {html.escape(str(factor["name"]))}</div>
         <div class="factor-score" style="color:{card_color}">{score_value if score_value is not None else "NA"} 分</div>
+        <div class="factor-weight">权重：{float(factor["weight"]) * 100:.1f}%</div>
         <div class="factor-value">当前值：{html.escape(str(factor["display_value"]))}</div>
         <p>{html.escape(str(factor["reason"]))}</p>
       </section>
@@ -840,6 +943,74 @@ def render_html_report(data: pd.DataFrame, summary: dict[str, object]) -> str:
       font-size: 15px;
       font-weight: 700;
     }}
+    .backtest-section {{
+      margin-top: 26px;
+      padding: 0 44px;
+    }}
+    .backtest-grid {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 18px;
+      margin-top: 20px;
+    }}
+    .backtest-card {{
+      background: white;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 18px;
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+    }}
+    .backtest-card-title {{
+      font-size: 22px;
+      font-weight: 900;
+    }}
+    .backtest-metrics {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 16px;
+    }}
+    .backtest-metrics span {{
+      display: block;
+      color: #64748b;
+      font-size: 13px;
+      font-weight: 800;
+    }}
+    .backtest-metrics strong {{
+      display: block;
+      margin-top: 4px;
+      color: #0f172a;
+      font-size: 24px;
+      line-height: 1;
+      font-weight: 900;
+    }}
+    .backtest-table-wrap {{
+      margin-top: 18px;
+      overflow-x: auto;
+      background: white;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+    }}
+    .backtest-table {{
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }}
+    .backtest-table th,
+    .backtest-table td {{
+      padding: 11px 12px;
+      border-bottom: 1px solid #e5e7eb;
+      text-align: left;
+      white-space: nowrap;
+    }}
+    .backtest-table th {{
+      color: #64748b;
+      font-size: 12px;
+      font-weight: 900;
+    }}
+    .backtest-table tr:last-child td {{
+      border-bottom: 0;
+    }}
     .chart {{
       margin-top: 24px;
       background: white;
@@ -864,6 +1035,7 @@ def render_html_report(data: pd.DataFrame, summary: dict[str, object]) -> str:
     }}
     .factor-title {{ color: #334155; font-weight: 700; }}
     .factor-score {{ margin-top: 12px; font-size: 32px; font-weight: 800; }}
+    .factor-weight {{ margin-top: 2px; color: #475569; font-size: 13px; font-weight: 700; }}
     .factor-value {{ margin-top: 4px; color: #64748b; }}
     .factor p {{ margin: 10px 0 0; line-height: 1.55; }}
     .note {{
@@ -921,7 +1093,11 @@ def render_html_report(data: pd.DataFrame, summary: dict[str, object]) -> str:
       .reference-section {{
         padding: 0;
       }}
+      .backtest-section {{
+        padding: 0;
+      }}
       .reference-grid,
+      .backtest-grid,
       .factors {{
         grid-template-columns: 1fr;
       }}
@@ -947,6 +1123,7 @@ def render_html_report(data: pd.DataFrame, summary: dict[str, object]) -> str:
       <div class="gauge-wrap">{gauge}</div>
     </section>
     {reference_section}
+    {backtest_section}
     <section class="chart">{chart}</section>
     {index_chart_section}
     <section class="factors">
@@ -959,11 +1136,11 @@ def render_html_report(data: pd.DataFrame, summary: dict[str, object]) -> str:
 """
 
 
-def write_outputs(data: pd.DataFrame, out_dir: Path) -> dict[str, Path]:
+def write_outputs(data: pd.DataFrame, out_dir: Path, factors: list[Factor]) -> dict[str, Path]:
     logger.info("Writing outputs to %s", out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     latest = latest_complete_row(data)
-    summary = build_summary(latest)
+    summary = build_summary(latest, factors)
     logger.info(
         "Latest complete score: date=%s, score=%s, label=%s",
         summary["date"],
@@ -973,17 +1150,24 @@ def write_outputs(data: pd.DataFrame, out_dir: Path) -> dict[str, Path]:
 
     history_path = out_dir / "bubble_history.csv"
     latest_path = out_dir / "latest.json"
+    backtest_path = out_dir / "backtest_summary.json"
     report_path = out_dir / "report.html"
 
     data.to_csv(history_path, index_label="date")
     logger.info("Wrote history CSV: %s", history_path)
     latest_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info("Wrote latest JSON: %s", latest_path)
-    report_path.write_text(render_html_report(data, summary), encoding="utf-8")
+    backtest_summary = build_backtest_summary(data)
+    backtest_path.write_text(
+        json.dumps(backtest_summary, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    logger.info("Wrote backtest JSON: %s", backtest_path)
+    report_path.write_text(render_html_report(data, summary, backtest_summary), encoding="utf-8")
     logger.info("Wrote HTML report: %s", report_path)
 
     return {
         "history": history_path,
         "latest": latest_path,
+        "backtest": backtest_path,
         "report": report_path,
     }

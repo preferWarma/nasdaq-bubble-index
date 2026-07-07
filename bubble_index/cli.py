@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 
 from .data_sources import load_live_data, load_offline_sample
+from .factors import default_factor_weights_path, load_factors
 from .logging_config import configure_logging, default_log_config_path
 from .reporting import write_outputs
 from .scoring import compute_scores
@@ -24,6 +25,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=20,
         help="Rolling percentile window in trading years.",
+    )
+    parser.add_argument(
+        "--factor-weights",
+        default=str(default_factor_weights_path()),
+        help="Path to factor weights JSON config.",
     )
     parser.add_argument(
         "--offline-sample",
@@ -70,7 +76,14 @@ def main(argv: list[str] | None = None) -> None:
     configure_logging(args.log_config, args.log_level)
 
     logger.info("Starting Nasdaq bubble index run")
-    logger.info("Start date=%s, output=%s, window_years=%s", args.start, args.out, args.window_years)
+    logger.info(
+        "Start date=%s, output=%s, window_years=%s",
+        args.start,
+        args.out,
+        args.window_years,
+    )
+    factors = load_factors(args.factor_weights)
+    logger.info("Loaded %d factor weights from %s", len(factors), args.factor_weights)
 
     if args.offline_sample:
         logger.info("Loading deterministic offline sample data")
@@ -87,8 +100,8 @@ def main(argv: list[str] | None = None) -> None:
         )
     logger.info("Raw data ready: rows=%d, columns=%d", len(raw), len(raw.columns))
 
-    scored = compute_scores(raw, window_years=args.window_years)
-    paths = write_outputs(scored, Path(args.out))
+    scored = compute_scores(raw, factors=factors, window_years=args.window_years)
+    paths = write_outputs(scored, Path(args.out), factors=factors)
     summary = json.loads(paths["latest"].read_text(encoding="utf-8"))
 
     logger.info(
