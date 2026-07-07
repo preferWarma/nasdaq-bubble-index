@@ -11,3 +11,5 @@ output_*/
 
 # macOS
 .DS_Store
+
+site/
