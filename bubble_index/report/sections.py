@@ -15,6 +15,11 @@ from .time_series import future_max_drawdown, scaled_index_series
 logger = logging.getLogger(__name__)
 
 
+def format_score_points(value: float | int | None) -> str:
+    text = format_score(value)
+    return "NA" if text == "NA" else f"{text} 分"
+
+
 def previous_score_caption(data: pd.DataFrame) -> str:
     series = data["bubble_score"].dropna()
     if len(series) < 2:
@@ -104,6 +109,8 @@ def render_backtest_section(backtest_summary: dict[str, object] | None) -> str:
         top_decile = {}
     if not isinstance(score_ge_75, dict):
         score_ge_75 = {}
+    future_years = backtest_summary.get("future_window_years", 3)
+    top_decile_threshold = top_decile.get("score_threshold")
     model_card = f"""
       <section class="backtest-card">
         <div class="backtest-card-title">{html.escape(str(model.get("label", "模型")))}</div>
@@ -111,6 +118,10 @@ def render_backtest_section(backtest_summary: dict[str, object] | None) -> str:
           <div>
             <span>相关性</span>
             <strong>{format_decimal(model.get("score_to_future_drawdown_severity_corr"), 2)}</strong>
+          </div>
+          <div>
+            <span>Top 10% 分数门槛</span>
+            <strong>{format_score_points(top_decile_threshold)}</strong>
           </div>
           <div>
             <span>Top 10% 后续回撤</span>
@@ -124,6 +135,12 @@ def render_backtest_section(backtest_summary: dict[str, object] | None) -> str:
             <span>75分以上样本</span>
             <strong>{score_ge_75.get("count", 0)}</strong>
           </div>
+        </div>
+        <div class="backtest-explain">
+          <p><strong>相关性</strong>：分数与未来 {future_years} 年最大回撤严重程度的相关性；越接近 1，代表高分越容易对应后续深回撤。</p>
+          <p><strong>Top 10%</strong>：将月末样本按泡沫分数排序后取最高 10%，本次门槛为 {format_score_points(top_decile_threshold)}。</p>
+          <p><strong>后续回撤</strong>：Top 10% 高分月份之后 {future_years} 年 Nasdaq 最大回撤的平均值；负值越大，代表后续压力越明显。</p>
+          <p><strong>大跌命中率</strong>：Top 10% 高分月份中，未来 {future_years} 年出现 25% 以上最大回撤的比例。</p>
         </div>
       </section>
 """
@@ -166,7 +183,7 @@ def render_backtest_section(backtest_summary: dict[str, object] | None) -> str:
     return f"""
     <section class="backtest-section">
       <div class="section-title">回测摘要</div>
-      <div class="section-subtitle">月度样本，观察分数与未来 {backtest_summary.get("future_window_years", 3)} 年 Nasdaq 最大回撤的关系</div>
+      <div class="section-subtitle">月度样本，观察分数与未来 {future_years} 年 Nasdaq 最大回撤的关系</div>
       <div class="backtest-grid">{model_card}</div>
       {stage_table}
     </section>

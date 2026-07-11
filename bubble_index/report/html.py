@@ -16,6 +16,34 @@ from .summary import risk_label
 logger = logging.getLogger(__name__)
 
 
+def manual_refresh_bootstrap() -> str:
+    return """
+  <script>
+    (function () {
+      const refreshParam = "_report_refresh";
+      const currentUrl = new URL(window.location.href);
+      if (currentUrl.searchParams.has(refreshParam) && window.history.replaceState) {
+        currentUrl.searchParams.delete(refreshParam);
+        window.history.replaceState(null, "", currentUrl.toString());
+      }
+
+      const refreshButton = document.querySelector("[data-refresh-report]");
+      if (!refreshButton) {
+        return;
+      }
+
+      refreshButton.addEventListener("click", function () {
+        const nextUrl = new URL(window.location.href);
+        nextUrl.searchParams.set(refreshParam, Date.now().toString());
+        refreshButton.disabled = true;
+        refreshButton.querySelector(".refresh-label").textContent = "刷新中";
+        window.location.replace(nextUrl.toString());
+      });
+    })();
+  </script>
+"""
+
+
 def render_html_report(
     data: pd.DataFrame,
     summary: dict[str, object],
@@ -47,6 +75,7 @@ def render_html_report(
 
     charts = render_interactive_charts(data)
     chart_bootstrap = interactive_chart_bootstrap() if charts else ""
+    refresh_bootstrap = manual_refresh_bootstrap()
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -69,11 +98,45 @@ def render_html_report(
       padding: 10px 30px 22px;
       background: white;
     }}
+    .header-bar {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }}
     .brand {{
-      text-align: right;
       color: #94a3b8;
       font-size: 18px;
       font-weight: 700;
+    }}
+    .refresh-report {{
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border: 1px solid #e2e8f0;
+      border-radius: 999px;
+      background: #ffffff;
+      color: #334155;
+      padding: 8px 13px;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 800;
+      line-height: 1;
+      cursor: pointer;
+      box-shadow: 0 6px 16px rgba(15, 23, 42, 0.06);
+    }}
+    .refresh-report:hover {{
+      border-color: #cbd5e1;
+      color: #0f172a;
+    }}
+    .refresh-report:disabled {{
+      cursor: wait;
+      opacity: 0.72;
+    }}
+    .refresh-icon {{
+      display: inline-block;
+      font-size: 15px;
+      line-height: 1;
     }}
     h1 {{
       margin: 20px 0 4px;
@@ -300,6 +363,24 @@ def render_html_report(
       line-height: 1;
       font-weight: 900;
     }}
+    .backtest-explain {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px 18px;
+      margin-top: 18px;
+      padding-top: 15px;
+      border-top: 1px solid #e5e7eb;
+      color: #475569;
+      font-size: 13px;
+      line-height: 1.5;
+    }}
+    .backtest-explain p {{
+      margin: 0;
+    }}
+    .backtest-explain strong {{
+      color: #0f172a;
+      font-weight: 900;
+    }}
     .backtest-table-wrap {{
       margin-top: 18px;
       overflow-x: auto;
@@ -441,8 +522,15 @@ def render_html_report(
       .poster-head {{
         padding: 8px 10px 18px;
       }}
+      .header-bar {{
+        align-items: flex-start;
+      }}
       .brand {{
         font-size: 14px;
+      }}
+      .refresh-report {{
+        padding: 7px 10px;
+        font-size: 13px;
       }}
       h1 {{
         font-size: 44px;
@@ -476,6 +564,10 @@ def render_html_report(
       .factors {{
         grid-template-columns: 1fr;
       }}
+      .backtest-metrics,
+      .backtest-explain {{
+        grid-template-columns: 1fr;
+      }}
       .interactive-chart-section {{
         padding: 14px 8px 12px;
       }}
@@ -491,7 +583,13 @@ def render_html_report(
 <body>
   <main>
     <header class="poster-head">
-      <div class="brand">Nasdaq Bubble Index</div>
+      <div class="header-bar">
+        <div class="brand">Nasdaq Bubble Index</div>
+        <button class="refresh-report" type="button" data-refresh-report title="重新加载最新已部署报告">
+          <span class="refresh-icon" aria-hidden="true">↻</span>
+          <span class="refresh-label">刷新报告</span>
+        </button>
+      </div>
       <h1>美股泡沫评估</h1>
       <div class="subtitle">截至 {summary["date"]} 收盘</div>
       <div class="title-rule"></div>
@@ -514,6 +612,7 @@ def render_html_report(
     </section>
     <p class="note">说明：本工具只使用免费公开数据。FRED/F​INRA/Cboe 等来源可能存在发布时间差，月度数据会向前填充到每日频率。请把结果当作研究辅助，而不是投资建议。</p>
   </main>
+  {refresh_bootstrap}
   {chart_bootstrap}
 </body>
 </html>

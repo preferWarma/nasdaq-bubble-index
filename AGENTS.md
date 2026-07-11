@@ -79,6 +79,9 @@ by git; `static/echarts.min.js` is a source asset and should be committed.
   remains readable. Full-range bubble score view stays anchored to `0-100`.
 - Special stage explanations live below the chart as chips to avoid label
   overlap on dense years such as 2020-2022.
+- The header refresh button only cache-busts and reloads the latest deployed
+  HTML. It does not fetch market data in the browser; data refresh still happens
+  through the Python pipeline or GitHub Actions.
 
 ## GitHub Pages
 
