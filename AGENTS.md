@@ -49,7 +49,7 @@ sample.
 - `bubble_index/logging_config.py`: logging setup
 - `bubble_index/constants.py`: public data URLs and ticker lists
 - `config/factor_weights.json`: default optimized 6-group factor weights
-- `conf/logging.conf`: default logging configuration
+- `config/logging.conf`: default logging configuration
 - `static/echarts.min.js`: vendored Apache ECharts runtime used by `report.html`
 - `.github/workflows/deploy-pages.yml`: GitHub Pages build and deploy workflow
 
