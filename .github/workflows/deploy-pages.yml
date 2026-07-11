@@ -6,7 +6,9 @@ on:
       - main
   workflow_dispatch:
   schedule:
-    - cron: "30 22 * * 1-5"
+    # GitHub Actions cron uses UTC. 02:30 UTC Tue-Sat = 10:30 Beijing time,
+    # leaving public data sources more time to publish the previous US trading day.
+    - cron: "30 2 * * 2-6"
 
 permissions:
   contents: read
