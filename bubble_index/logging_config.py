@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 def default_log_config_path() -> Path:
-    return Path(__file__).resolve().parent.parent / "logging.conf"
+    return Path(__file__).resolve().parent.parent / "conf" / "logging.conf"
 
 
 def configure_logging(config_path: str | Path | None = None, log_level: str | None = None) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import json
 import logging
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -27,6 +28,27 @@ HISTORICAL_REFERENCE_STAGES = (
     (2000, "互联网泡沫"),
     *((year, BUBBLE_STAGE_NOTES[year]) for year in BUBBLE_STAGE_YEARS),
 )
+STATIC_ASSET_FILES = ("echarts.min.js",)
+
+
+def project_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def static_assets_dir() -> Path:
+    return project_root() / "static"
+
+
+def copy_static_assets(out_dir: Path) -> None:
+    source_dir = static_assets_dir()
+    target_dir = out_dir / "static"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for filename in STATIC_ASSET_FILES:
+        source = source_dir / filename
+        if not source.exists():
+            logger.warning("Static asset missing, interactive charts may not load: %s", source)
+            continue
+        shutil.copy2(source, target_dir / filename)
 
 
 def risk_label(score: float) -> tuple[str, str]:
@@ -667,6 +689,458 @@ def svg_index_chart(data: pd.DataFrame, width: int = 920, height: int = 520) -> 
 """
 
 
+def chart_number(value: float | int | None, digits: int = 2) -> float | None:
+    if value is None or pd.isna(value):
+        return None
+    return round(float(value), digits)
+
+
+def script_json(payload: dict[str, object]) -> str:
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+
+
+def render_stage_chips(stages: list[dict[str, object]]) -> str:
+    chips = []
+    for stage in stages:
+        chips.append(
+            f"""
+        <span class="stage-chip">
+          <strong>{html.escape(str(stage["year"]))}</strong>
+          {html.escape(str(stage["note"]))}
+          <span>{html.escape(str(stage["date"]))} · {format_decimal(stage["score"], 1)}分</span>
+        </span>
+"""
+        )
+    return "".join(chips)
+
+
+def interactive_chart_payload(data: pd.DataFrame) -> dict[str, object] | None:
+    bubble_series = trim_to_recent_years(data["bubble_score"].dropna(), years=20)
+    if bubble_series.empty:
+        return None
+
+    frame = pd.DataFrame(
+        {
+            "bubble": data["bubble_score"],
+            "sp500": scaled_index_series(data, "sp500", "spy_close"),
+            "nasdaq": scaled_index_series(data, "nasdaq", "qqq_close"),
+        },
+        index=data.index,
+    )
+    frame = trim_frame_to_range(frame, bubble_series.index[0], bubble_series.index[-1])
+    frame = frame.dropna(subset=["bubble", "sp500", "nasdaq"])
+    if frame.empty:
+        return None
+
+    stages = []
+    for year, point_date, score in find_stage_points(bubble_series):
+        if point_date < frame.index[0] or point_date > frame.index[-1]:
+            continue
+        position = nearest_index_position(frame.index, point_date)
+        row = frame.iloc[position]
+        stages.append(
+            {
+                "year": year,
+                "note": BUBBLE_STAGE_NOTES.get(year, ""),
+                "date": frame.index[position].strftime("%Y-%m-%d"),
+                "score": chart_number(score, 1),
+                "sp500": chart_number(row["sp500"], 2),
+                "nasdaq": chart_number(row["nasdaq"], 2),
+            }
+        )
+
+    return {
+        "dates": [date.strftime("%Y-%m-%d") for date in frame.index],
+        "bubble": [chart_number(value, 2) for value in frame["bubble"]],
+        "sp500": [chart_number(value, 2) for value in frame["sp500"]],
+        "nasdaq": [chart_number(value, 2) for value in frame["nasdaq"]],
+        "stages": stages,
+    }
+
+
+def render_interactive_charts(data: pd.DataFrame) -> str:
+    payload = interactive_chart_payload(data)
+    if not payload:
+        return ""
+    stages = payload.get("stages", [])
+    stage_chips = render_stage_chips(stages) if isinstance(stages, list) else ""
+    return f"""
+    <section class="chart interactive-chart-section">
+      <div class="interactive-chart-head">
+        <div>
+          <div class="interactive-chart-title">泡沫分数与指数走势</div>
+          <div class="interactive-chart-subtitle">20 年窗口</div>
+        </div>
+      </div>
+      <div id="bubble-score-chart" class="echart bubble-echart"></div>
+      <div id="market-index-chart" class="echart index-echart"></div>
+      <div class="stage-chip-row">{stage_chips}</div>
+      <div id="chart-fallback" class="chart-fallback" hidden>交互图表脚本未加载。</div>
+      <script id="bubble-chart-data" type="application/json">{script_json(payload)}</script>
+    </section>
+"""
+
+
+def interactive_chart_bootstrap() -> str:
+    return """
+  <script src="static/echarts.min.js"></script>
+  <script>
+    (function () {
+      const dataNode = document.getElementById("bubble-chart-data");
+      const bubbleNode = document.getElementById("bubble-score-chart");
+      const indexNode = document.getElementById("market-index-chart");
+      if (!dataNode || !bubbleNode || !indexNode) return;
+
+      const fallbackNode = document.getElementById("chart-fallback");
+      if (!window.echarts) {
+        if (fallbackNode) fallbackNode.hidden = false;
+        return;
+      }
+
+      const chartData = JSON.parse(dataNode.textContent);
+      const stages = chartData.stages || [];
+      const stageByDate = new Map(stages.map((stage) => [stage.date, stage]));
+      const numberFormatter = new Intl.NumberFormat("en-US", {
+        maximumFractionDigits: 1
+      });
+
+      function formatNumber(value) {
+        if (value === null || value === undefined || Number.isNaN(Number(value))) return "NA";
+        return numberFormatter.format(Number(value));
+      }
+
+      function stageText(date) {
+        const stage = stageByDate.get(date);
+        if (!stage) return "";
+        return `<br/><span style="color:#b91c1c;font-weight:700">${stage.year} ${stage.note}</span>`;
+      }
+
+      function stageLines(showLabel) {
+        return stages.map((stage) => ({
+          name: `${stage.year} ${stage.note}`,
+          xAxis: stage.date,
+          label: {
+            show: Boolean(showLabel),
+            formatter: String(stage.year),
+            color: "#b91c1c",
+            fontWeight: 800,
+            fontSize: 11
+          }
+        }));
+      }
+
+      function finiteValues(series, startIndex, endIndex) {
+        const values = [];
+        for (let index = startIndex; index <= endIndex; index += 1) {
+          const value = Number(series[index]);
+          if (Number.isFinite(value)) values.push(value);
+        }
+        return values;
+      }
+
+      function paddedRange(values, options) {
+        if (!values.length) return { min: null, max: null };
+        const settings = Object.assign({
+          padding: 0.08,
+          minPadding: 0,
+          minimumSpan: 1,
+          digits: 0,
+          hardMin: null,
+          hardMax: null
+        }, options || {});
+        let min = Math.min(...values);
+        let max = Math.max(...values);
+        let span = max - min;
+        if (span <= 0) {
+          span = Math.max(Math.abs(max) * 0.02, settings.minimumSpan);
+        }
+        let lower = min - Math.max(span * settings.padding, settings.minPadding);
+        let upper = max + Math.max(span * settings.padding, settings.minPadding);
+        if ((upper - lower) < settings.minimumSpan) {
+          const middle = (upper + lower) / 2;
+          lower = middle - settings.minimumSpan / 2;
+          upper = middle + settings.minimumSpan / 2;
+        }
+        if (settings.hardMin !== null) lower = Math.max(settings.hardMin, lower);
+        if (settings.hardMax !== null) upper = Math.min(settings.hardMax, upper);
+        const factor = Math.pow(10, settings.digits);
+        return {
+          min: Math.floor(lower * factor) / factor,
+          max: Math.ceil(upper * factor) / factor
+        };
+      }
+
+      function zoomToIndexes(start, end) {
+        const lastIndex = Math.max(chartData.dates.length - 1, 0);
+        const startIndex = Math.max(0, Math.min(lastIndex, Math.floor(lastIndex * start / 100)));
+        const endIndex = Math.max(startIndex, Math.min(lastIndex, Math.ceil(lastIndex * end / 100)));
+        return { startIndex, endIndex };
+      }
+
+      function extractZoom(params) {
+        const zoom = params && params.batch && params.batch.length ? params.batch[0] : (params || {});
+        return {
+          start: Number.isFinite(zoom.start) ? zoom.start : currentZoom.start,
+          end: Number.isFinite(zoom.end) ? zoom.end : currentZoom.end
+        };
+      }
+
+      function applyVisibleAxisRange(start, end) {
+        const { startIndex, endIndex } = zoomToIndexes(start, end);
+        const fullRange = start <= 0.05 && end >= 99.95;
+        const bubbleRange = fullRange
+          ? { min: 0, max: 100 }
+          : paddedRange(finiteValues(chartData.bubble, startIndex, endIndex), {
+              padding: 0.18,
+              minPadding: 1.5,
+              minimumSpan: 8,
+              digits: 1,
+              hardMin: 0,
+              hardMax: 100
+            });
+        const sp500Range = paddedRange(finiteValues(chartData.sp500, startIndex, endIndex), {
+          padding: 0.08,
+          minimumSpan: 100,
+          digits: 0
+        });
+        const nasdaqRange = paddedRange(finiteValues(chartData.nasdaq, startIndex, endIndex), {
+          padding: 0.08,
+          minimumSpan: 250,
+          digits: 0
+        });
+
+        bubbleChart.setOption({ yAxis: { min: bubbleRange.min, max: bubbleRange.max } });
+        indexChart.setOption({
+          yAxis: [
+            { min: sp500Range.min, max: sp500Range.max },
+            { min: nasdaqRange.min, max: nasdaqRange.max }
+          ]
+        });
+      }
+
+      function dispatchZoom(targetChart, start, end, zoomIndexes) {
+        for (const dataZoomIndex of zoomIndexes) {
+          targetChart.dispatchAction({ type: "dataZoom", dataZoomIndex, start, end });
+        }
+      }
+
+      let currentZoom = { start: 0, end: 100 };
+      let syncingZoom = false;
+
+      function handleZoom(params, targetChart, targetZoomIndexes) {
+        const zoom = extractZoom(params);
+        currentZoom = zoom;
+        applyVisibleAxisRange(zoom.start, zoom.end);
+        if (syncingZoom) return;
+        syncingZoom = true;
+        dispatchZoom(targetChart, zoom.start, zoom.end, targetZoomIndexes);
+        syncingZoom = false;
+      }
+
+      const bubbleStagePoints = stages.map((stage) => ({
+        name: `${stage.year} ${stage.note}`,
+        coord: [stage.date, stage.score],
+        value: stage.score,
+        symbol: "circle",
+        symbolSize: 9,
+        itemStyle: { color: "#b91c1c", borderColor: "#ffffff", borderWidth: 2 },
+        label: { show: false }
+      }));
+
+      const sp500StagePoints = stages.map((stage) => ({
+        name: `${stage.year} ${stage.note}`,
+        coord: [stage.date, stage.sp500],
+        value: stage.sp500,
+        symbolSize: 8,
+        itemStyle: { color: "#0f8f83", borderColor: "#ffffff", borderWidth: 2 },
+        label: { show: false }
+      }));
+
+      const nasdaqStagePoints = stages.map((stage) => ({
+        name: `${stage.year} ${stage.note}`,
+        coord: [stage.date, stage.nasdaq],
+        value: stage.nasdaq,
+        symbolSize: 8,
+        itemStyle: { color: "#d99a22", borderColor: "#ffffff", borderWidth: 2 },
+        label: { show: false }
+      }));
+
+      const commonXAxis = {
+        type: "category",
+        boundaryGap: false,
+        data: chartData.dates,
+        axisLabel: { color: "#64748b", hideOverlap: true },
+        axisLine: { lineStyle: { color: "#cbd5e1" } },
+        axisTick: { lineStyle: { color: "#cbd5e1" } }
+      };
+
+      const commonToolbox = {
+        right: 12,
+        top: 6,
+        itemSize: 15,
+        feature: {
+          dataZoom: {
+            yAxisIndex: "none",
+            title: { zoom: "区域缩放", back: "还原缩放" }
+          },
+          restore: { title: "重置" },
+          saveAsImage: { title: "保存图片", pixelRatio: 2 }
+        }
+      };
+
+      const verticalMarkLine = {
+        symbol: "none",
+        silent: true,
+        lineStyle: { color: "#b91c1c", type: "dashed", opacity: 0.26, width: 1 },
+        label: { show: false },
+        data: stageLines(false)
+      };
+
+      const bubbleChart = echarts.init(bubbleNode, null, { renderer: "canvas" });
+      const indexChart = echarts.init(indexNode, null, { renderer: "canvas" });
+
+      bubbleChart.setOption({
+        animation: false,
+        color: ["#2563eb"],
+        grid: { left: 46, right: 24, top: 42, bottom: 58, containLabel: true },
+        toolbox: commonToolbox,
+        tooltip: {
+          trigger: "axis",
+          confine: true,
+          axisPointer: { type: "cross" },
+          formatter: function (params) {
+            const point = params[0];
+            const date = point.axisValue;
+            return `${date}<br/>泡沫分数：<b>${formatNumber(point.data)}</b>${stageText(date)}`;
+          }
+        },
+        xAxis: commonXAxis,
+        yAxis: {
+          type: "value",
+          min: 0,
+          max: 100,
+          axisLabel: { color: "#64748b" },
+          axisLine: { lineStyle: { color: "#cbd5e1" } },
+          splitLine: { lineStyle: { color: "#e2e8f0" } }
+        },
+        dataZoom: [{ type: "inside", filterMode: "none", throttle: 50 }],
+        series: [{
+          name: "泡沫分数",
+          type: "line",
+          data: chartData.bubble,
+          showSymbol: false,
+          lineStyle: { width: 2.6, color: "#2563eb" },
+          markArea: {
+            silent: true,
+            data: [
+              [{ yAxis: 85, itemStyle: { color: "rgba(254, 226, 226, 0.72)" } }, { yAxis: 100 }],
+              [{ yAxis: 75, itemStyle: { color: "rgba(255, 237, 213, 0.72)" } }, { yAxis: 85 }],
+              [{ yAxis: 60, itemStyle: { color: "rgba(254, 243, 199, 0.72)" } }, { yAxis: 75 }],
+              [{ yAxis: 40, itemStyle: { color: "rgba(236, 253, 245, 0.72)" } }, { yAxis: 60 }],
+              [{ yAxis: 0, itemStyle: { color: "rgba(240, 253, 244, 0.72)" } }, { yAxis: 40 }]
+            ]
+          },
+          markLine: verticalMarkLine,
+          markPoint: { data: bubbleStagePoints }
+        }]
+      });
+
+      indexChart.setOption({
+        animation: false,
+        color: ["#0f8f83", "#d99a22"],
+        grid: { left: 58, right: 68, top: 54, bottom: 92, containLabel: true },
+        legend: {
+          top: 12,
+          left: 16,
+          textStyle: { color: "#334155", fontWeight: 800 }
+        },
+        toolbox: commonToolbox,
+        tooltip: {
+          trigger: "axis",
+          confine: true,
+          axisPointer: { type: "cross" },
+          formatter: function (params) {
+            const date = params[0].axisValue;
+            const lines = params.map((point) => (
+              `${point.marker}${point.seriesName}：<b>${formatNumber(point.data)}</b>`
+            ));
+            return `${date}<br/>${lines.join("<br/>")}${stageText(date)}`;
+          }
+        },
+        xAxis: commonXAxis,
+        yAxis: [
+          {
+            type: "value",
+            name: "S&P 500",
+            scale: true,
+            axisLabel: { color: "#64748b" },
+            axisLine: { lineStyle: { color: "#cbd5e1" } },
+            splitLine: { lineStyle: { color: "#e2e8f0" } }
+          },
+          {
+            type: "value",
+            name: "Nasdaq",
+            scale: true,
+            axisLabel: { color: "#b7791f" },
+            axisLine: { lineStyle: { color: "#d99a22" } },
+            splitLine: { show: false }
+          }
+        ],
+        dataZoom: [
+          { type: "inside", filterMode: "none", throttle: 50 },
+          {
+            type: "slider",
+            filterMode: "none",
+            height: 24,
+            bottom: 22,
+            borderColor: "#e2e8f0",
+            fillerColor: "rgba(37, 99, 235, 0.12)",
+            handleStyle: { color: "#2563eb" },
+            textStyle: { color: "#64748b" }
+          }
+        ],
+        series: [
+          {
+            name: "S&P 500（左轴）",
+            type: "line",
+            data: chartData.sp500,
+            yAxisIndex: 0,
+            showSymbol: false,
+            lineStyle: { width: 2.5 },
+            markLine: verticalMarkLine,
+            markPoint: { data: sp500StagePoints }
+          },
+          {
+            name: "Nasdaq（右轴）",
+            type: "line",
+            data: chartData.nasdaq,
+            yAxisIndex: 1,
+            showSymbol: false,
+            lineStyle: { width: 2.5 },
+            markPoint: { data: nasdaqStagePoints }
+          }
+        ]
+      });
+
+      bubbleChart.on("dataZoom", function (params) {
+        handleZoom(params, indexChart, [0, 1]);
+      });
+      indexChart.on("dataZoom", function (params) {
+        handleZoom(params, bubbleChart, [0]);
+      });
+      applyVisibleAxisRange(currentZoom.start, currentZoom.end);
+
+      const resizeCharts = function () {
+        bubbleChart.resize();
+        indexChart.resize();
+      };
+      window.addEventListener("resize", resizeCharts);
+      setTimeout(resizeCharts, 0);
+    })();
+  </script>
+"""
+
+
 def build_summary(latest: pd.Series, factors: list[Factor]) -> dict[str, object]:
     logger.debug("Building summary for %s", latest.name)
     label, color = risk_label(float(latest["bubble_score"]))
@@ -726,11 +1200,8 @@ def render_html_report(
 """
         )
 
-    chart = svg_line_chart(data)
-    index_chart = svg_index_chart(data)
-    index_chart_section = (
-        f'<section class="chart secondary-chart">{index_chart}</section>' if index_chart else ""
-    )
+    charts = render_interactive_charts(data)
+    chart_bootstrap = interactive_chart_bootstrap() if charts else ""
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1018,8 +1489,67 @@ def render_html_report(
       border-radius: 8px;
       overflow: hidden;
     }}
-    .secondary-chart {{
-      margin-top: 16px;
+    .interactive-chart-section {{
+      padding: 18px 18px 16px;
+    }}
+    .interactive-chart-head {{
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
+      padding: 2px 4px 0;
+    }}
+    .interactive-chart-title {{
+      color: #0f172a;
+      font-size: 20px;
+      font-weight: 900;
+    }}
+    .interactive-chart-subtitle {{
+      margin-top: 3px;
+      color: #64748b;
+      font-size: 13px;
+      font-weight: 800;
+    }}
+    .echart {{
+      width: 100%;
+      min-width: 0;
+    }}
+    .bubble-echart {{
+      height: 360px;
+      margin-top: 8px;
+    }}
+    .index-echart {{
+      height: 420px;
+      margin-top: 10px;
+    }}
+    .stage-chip-row {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 2px 4px 0;
+    }}
+    .stage-chip {{
+      display: inline-flex;
+      align-items: baseline;
+      gap: 6px;
+      padding: 7px 10px;
+      border: 1px solid #fee2e2;
+      border-radius: 8px;
+      background: #fff7f7;
+      color: #991b1b;
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1.2;
+    }}
+    .stage-chip span {{
+      color: #64748b;
+      font-weight: 700;
+    }}
+    .chart-fallback {{
+      margin: 12px 4px 0;
+      color: #991b1b;
+      font-size: 14px;
+      font-weight: 800;
     }}
     .factors {{
       display: grid;
@@ -1101,6 +1631,15 @@ def render_html_report(
       .factors {{
         grid-template-columns: 1fr;
       }}
+      .interactive-chart-section {{
+        padding: 14px 8px 12px;
+      }}
+      .bubble-echart {{
+        height: 330px;
+      }}
+      .index-echart {{
+        height: 380px;
+      }}
     }}
   </style>
 </head>
@@ -1124,13 +1663,13 @@ def render_html_report(
     </section>
     {reference_section}
     {backtest_section}
-    <section class="chart">{chart}</section>
-    {index_chart_section}
+    {charts}
     <section class="factors">
       {''.join(factor_cards)}
     </section>
     <p class="note">说明：本工具只使用免费公开数据。FRED/F​INRA/Cboe 等来源可能存在发布时间差，月度数据会向前填充到每日频率。请把结果当作研究辅助，而不是投资建议。</p>
   </main>
+  {chart_bootstrap}
 </body>
 </html>
 """
@@ -1139,6 +1678,7 @@ def render_html_report(
 def write_outputs(data: pd.DataFrame, out_dir: Path, factors: list[Factor]) -> dict[str, Path]:
     logger.info("Writing outputs to %s", out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    copy_static_assets(out_dir)
     latest = latest_complete_row(data)
     summary = build_summary(latest, factors)
     logger.info(
