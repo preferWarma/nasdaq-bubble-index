@@ -34,7 +34,18 @@ sample.
 - `bubble_index/factors.py`: 6 grouped factor definitions, display text, and configured weights
 - `bubble_index/backtesting.py`: future drawdown and historical stage backtest summaries
 - `bubble_index/weight_optimization.py`: random search plus walk-forward validation for group weights
-- `bubble_index/reporting.py`: summary JSON, CSV output, local ECharts HTML rendering, and static asset copying
+- `bubble_index/reporting.py`: compatibility facade that re-exports reporting helpers
+- `bubble_index/report/`: report rendering package
+  - `assets.py`: static asset copying for generated reports
+  - `charts.py`: static SVG helpers plus local ECharts payload/bootstrap
+  - `constants.py`: historical stage and static asset constants
+  - `formatting.py`: score, percent, number, and JSON formatting helpers
+  - `gauge.py`: SVG score gauge rendering
+  - `html.py`: full HTML page template
+  - `outputs.py`: `write_outputs()` orchestration
+  - `sections.py`: historical reference and backtest HTML sections
+  - `summary.py`: latest-score summary helpers
+  - `time_series.py`: chart/date/index series utilities
 - `bubble_index/logging_config.py`: logging setup
 - `bubble_index/constants.py`: public data URLs and ticker lists
 - `config/factor_weights.json`: default optimized 6-group factor weights
