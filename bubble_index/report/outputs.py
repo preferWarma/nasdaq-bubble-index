@@ -12,7 +12,7 @@ from ..backtesting import build_backtest_summary
 from ..factors import Factor
 from .assets import copy_static_assets
 from .html import render_html_report
-from .summary import build_summary, latest_complete_row
+from .summary import build_summary, latest_complete_row, previous_complete_row
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,8 @@ def write_outputs(data: pd.DataFrame, out_dir: Path, factors: list[Factor]) -> d
     out_dir.mkdir(parents=True, exist_ok=True)
     copy_static_assets(out_dir)
     latest = latest_complete_row(data)
-    summary = build_summary(latest, factors)
+    previous = previous_complete_row(data)
+    summary = build_summary(latest, factors, previous)
     logger.info(
         "Latest complete score: date=%s, score=%s, label=%s",
         summary["date"],

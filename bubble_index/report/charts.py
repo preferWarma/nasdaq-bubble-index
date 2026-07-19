@@ -346,6 +346,18 @@ def render_interactive_charts(data: pd.DataFrame) -> str:
           <div class="interactive-chart-title">泡沫分数与指数走势</div>
           <div class="interactive-chart-subtitle">20 年窗口</div>
         </div>
+        <div class="chart-range-controls" aria-label="选择图表显示时间范围">
+          <label>
+            <span>开始</span>
+            <input id="chart-start-date" type="date" />
+          </label>
+          <label>
+            <span>结束</span>
+            <input id="chart-end-date" type="date" />
+          </label>
+          <button id="chart-range-reset" type="button">全区间</button>
+          <div id="chart-range-message" class="chart-range-message" aria-live="polite"></div>
+        </div>
       </div>
       <div id="bubble-score-chart" class="echart bubble-echart"></div>
       <div id="market-index-chart" class="echart index-echart"></div>
@@ -365,6 +377,10 @@ def interactive_chart_bootstrap() -> str:
       const bubbleNode = document.getElementById("bubble-score-chart");
       const indexNode = document.getElementById("market-index-chart");
       if (!dataNode || !bubbleNode || !indexNode) return;
+      const startDateInput = document.getElementById("chart-start-date");
+      const endDateInput = document.getElementById("chart-end-date");
+      const resetRangeButton = document.getElementById("chart-range-reset");
+      const rangeMessage = document.getElementById("chart-range-message");
 
       const fallbackNode = document.getElementById("chart-fallback");
       if (!window.echarts) {
@@ -458,6 +474,104 @@ def interactive_chart_bootstrap() -> str:
         return Math.max(0, Math.min(100, index / lastIndex * 100));
       }
 
+      function normalizeZoom(start, end) {
+        const normalizedStart = Math.max(0, Math.min(100, Number(start)));
+        const normalizedEnd = Math.max(0, Math.min(100, Number(end)));
+        return {
+          start: Math.min(normalizedStart, normalizedEnd),
+          end: Math.max(normalizedStart, normalizedEnd)
+        };
+      }
+
+      function nearestDateIndex(value, fallback) {
+        if (!value) return fallback;
+        const exactIndex = chartData.dates.indexOf(String(value));
+        if (exactIndex >= 0) return exactIndex;
+        const firstDate = chartData.dates[0];
+        const lastDate = chartData.dates[chartData.dates.length - 1];
+        if (value <= firstDate) return 0;
+        if (value >= lastDate) return chartData.dates.length - 1;
+
+        let low = 0;
+        let high = chartData.dates.length - 1;
+        while (low <= high) {
+          const middle = Math.floor((low + high) / 2);
+          if (chartData.dates[middle] < value) {
+            low = middle + 1;
+          } else {
+            high = middle - 1;
+          }
+        }
+        const before = Math.max(0, low - 1);
+        const after = Math.min(chartData.dates.length - 1, low);
+        const beforeDiff = Math.abs(new Date(value) - new Date(chartData.dates[before]));
+        const afterDiff = Math.abs(new Date(chartData.dates[after]) - new Date(value));
+        return afterDiff < beforeDiff ? after : before;
+      }
+
+      function setRangeMessage(text) {
+        if (rangeMessage) rangeMessage.textContent = text || "";
+      }
+
+      function updateDateInputs(start, end) {
+        if (!startDateInput || !endDateInput) return;
+        const { startIndex, endIndex } = zoomToIndexes(start, end);
+        startDateInput.value = chartData.dates[startIndex] || "";
+        endDateInput.value = chartData.dates[endIndex] || "";
+      }
+
+      function applyZoomToCharts(start, end) {
+        currentZoom = normalizeZoom(start, end);
+        applyVisibleAxisRange(currentZoom.start, currentZoom.end);
+        updateDateInputs(currentZoom.start, currentZoom.end);
+        syncingZoom = true;
+        dispatchZoom(bubbleChart, currentZoom.start, currentZoom.end, [0]);
+        dispatchZoom(indexChart, currentZoom.start, currentZoom.end, [0, 1]);
+        syncingZoom = false;
+      }
+
+      function applyDateInputs() {
+        if (!startDateInput || !endDateInput) return;
+        const currentIndexes = zoomToIndexes(currentZoom.start, currentZoom.end);
+        const startIndex = nearestDateIndex(startDateInput.value, currentIndexes.startIndex);
+        const endIndex = nearestDateIndex(endDateInput.value, currentIndexes.endIndex);
+        const lowIndex = Math.min(startIndex, endIndex);
+        const highIndex = Math.max(startIndex, endIndex);
+        const start = indexToPercent(lowIndex);
+        const end = indexToPercent(highIndex);
+        const normalizedStartDate = chartData.dates[lowIndex];
+        const normalizedEndDate = chartData.dates[highIndex];
+        const adjusted = normalizedStartDate !== startDateInput.value ||
+          normalizedEndDate !== endDateInput.value ||
+          startIndex > endIndex;
+        setRangeMessage(adjusted ? "已定位到最接近的可用交易日。" : "");
+        applyZoomToCharts(start, end);
+      }
+
+      function setupDateInputs() {
+        if (!startDateInput || !endDateInput) return;
+        const firstDate = chartData.dates[0];
+        const lastDate = chartData.dates[chartData.dates.length - 1];
+        for (const input of [startDateInput, endDateInput]) {
+          input.min = firstDate;
+          input.max = lastDate;
+          input.addEventListener("change", applyDateInputs);
+          input.addEventListener("keydown", function (event) {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              applyDateInputs();
+            }
+          });
+        }
+        if (resetRangeButton) {
+          resetRangeButton.addEventListener("click", function () {
+            setRangeMessage("");
+            applyZoomToCharts(0, 100);
+          });
+        }
+        updateDateInputs(currentZoom.start, currentZoom.end);
+      }
+
       function zoomValueToIndex(value, fallback) {
         if (value === null || value === undefined) return fallback;
         const dateIndex = chartData.dates.indexOf(String(value));
@@ -548,9 +662,12 @@ def interactive_chart_bootstrap() -> str:
       let syncingZoom = false;
 
       function handleZoom(params, targetChart, targetZoomIndexes) {
-        const zoom = extractZoom(params);
+        const extractedZoom = extractZoom(params);
+        const zoom = normalizeZoom(extractedZoom.start, extractedZoom.end);
         currentZoom = zoom;
         applyVisibleAxisRange(zoom.start, zoom.end);
+        updateDateInputs(zoom.start, zoom.end);
+        setRangeMessage("");
         if (syncingZoom) return;
         syncingZoom = true;
         dispatchZoom(targetChart, zoom.start, zoom.end, targetZoomIndexes);
@@ -558,8 +675,8 @@ def interactive_chart_bootstrap() -> str:
       }
 
       function resetZoom() {
-        currentZoom = { start: 0, end: 100 };
-        applyVisibleAxisRange(currentZoom.start, currentZoom.end);
+        setRangeMessage("");
+        applyZoomToCharts(0, 100);
       }
 
       const bubbleStagePoints = stages.map((stage) => ({
@@ -755,7 +872,9 @@ def interactive_chart_bootstrap() -> str:
       });
       bubbleChart.on("restore", resetZoom);
       indexChart.on("restore", resetZoom);
+      setupDateInputs();
       applyVisibleAxisRange(currentZoom.start, currentZoom.end);
+      updateDateInputs(currentZoom.start, currentZoom.end);
 
       const resizeCharts = function () {
         bubbleChart.resize();

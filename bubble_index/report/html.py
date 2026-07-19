@@ -61,11 +61,13 @@ def render_html_report(
     for idx, factor in enumerate(summary["factors"], start=1):
         score_value = factor["score"]
         card_color = risk_label(float(score_value))[1] if score_value is not None else "#64748b"
+        previous_score = format_score(factor.get("previous_score"))
         factor_cards.append(
             f"""
       <section class="factor">
         <div class="factor-title">特征 {idx} · {html.escape(str(factor["name"]))}</div>
         <div class="factor-score" style="color:{card_color}">{score_value if score_value is not None else "NA"} 分</div>
+        <div class="factor-previous">上一交易日分数：{html.escape(previous_score)} 分</div>
         <div class="factor-weight">权重：{float(factor["weight"]) * 100:.1f}%</div>
         <div class="factor-value">当前值：{html.escape(str(factor["display_value"]))}</div>
         <p>{html.escape(str(factor["reason"]))}</p>
@@ -436,6 +438,61 @@ def render_html_report(
       font-size: 13px;
       font-weight: 800;
     }}
+    .chart-range-controls {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(130px, 1fr)) auto;
+      gap: 8px;
+      align-items: end;
+      min-width: min(100%, 430px);
+    }}
+    .chart-range-controls label {{
+      display: grid;
+      gap: 4px;
+      color: #64748b;
+      font-size: 12px;
+      font-weight: 900;
+    }}
+    .chart-range-controls input {{
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid #dbe3ef;
+      border-radius: 7px;
+      background: #ffffff;
+      color: #0f172a;
+      padding: 7px 8px;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 800;
+      min-height: 34px;
+    }}
+    .chart-range-controls input:focus {{
+      outline: 2px solid rgba(37, 99, 235, 0.18);
+      border-color: #93c5fd;
+    }}
+    .chart-range-controls button {{
+      border: 1px solid #dbe3ef;
+      border-radius: 7px;
+      background: #ffffff;
+      color: #334155;
+      padding: 8px 11px;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 900;
+      min-height: 34px;
+      cursor: pointer;
+    }}
+    .chart-range-controls button:hover {{
+      border-color: #cbd5e1;
+      color: #0f172a;
+    }}
+    .chart-range-message {{
+      grid-column: 1 / -1;
+      min-height: 15px;
+      color: #b91c1c;
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1.25;
+    }}
     .echart {{
       width: 100%;
       min-width: 0;
@@ -491,6 +548,7 @@ def render_html_report(
     }}
     .factor-title {{ color: #334155; font-weight: 700; }}
     .factor-score {{ margin-top: 12px; font-size: 32px; font-weight: 800; }}
+    .factor-previous {{ margin-top: 2px; color: #64748b; font-size: 13px; font-weight: 800; }}
     .factor-weight {{ margin-top: 2px; color: #475569; font-size: 13px; font-weight: 700; }}
     .factor-value {{ margin-top: 4px; color: #64748b; }}
     .factor p {{ margin: 10px 0 0; line-height: 1.55; }}
@@ -513,6 +571,12 @@ def render_html_report(
       }}
       .score-number {{
         justify-content: center;
+      }}
+      .interactive-chart-head {{
+        flex-direction: column;
+      }}
+      .chart-range-controls {{
+        width: 100%;
       }}
     }}
     @media (max-width: 720px) {{
@@ -570,6 +634,12 @@ def render_html_report(
       }}
       .interactive-chart-section {{
         padding: 14px 8px 12px;
+      }}
+      .chart-range-controls {{
+        grid-template-columns: 1fr 1fr;
+      }}
+      .chart-range-controls button {{
+        grid-column: 1 / -1;
       }}
       .bubble-echart {{
         height: 330px;

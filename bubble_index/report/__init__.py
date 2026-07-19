@@ -28,7 +28,13 @@ from .sections import (
     render_backtest_section,
     render_reference_section,
 )
-from .summary import build_summary, factor_reason, latest_complete_row, risk_label
+from .summary import (
+    build_summary,
+    factor_reason,
+    latest_complete_row,
+    previous_complete_row,
+    risk_label,
+)
 from .time_series import (
     find_stage_points,
     future_max_drawdown,
@@ -60,6 +66,7 @@ __all__ = [
     "latest_complete_row",
     "nearest_index_position",
     "previous_score_caption",
+    "previous_complete_row",
     "project_root",
     "render_backtest_section",
     "render_html_report",

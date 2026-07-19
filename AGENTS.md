@@ -75,6 +75,8 @@ by git; `static/echarts.min.js` is a source asset and should be committed.
   `copy_static_assets()` in sync.
 - The bubble score chart and index chart share the same visible date window.
   `dataZoom` events are manually synchronized between charts.
+- The date range inputs and the ECharts drag/zoom controls are also
+  bidirectionally synchronized; keep both paths wired to the same zoom state.
 - Y axes are recalculated from the visible range after zooming so local movement
   remains readable. Full-range bubble score view stays anchored to `0-100`.
 - Special stage explanations live below the chart as chips to avoid label

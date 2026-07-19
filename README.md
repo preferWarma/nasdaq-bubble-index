@@ -60,7 +60,7 @@ python nasdaq_bubble_index.py --offline-sample
 - `bubble_history.csv`：每日因子与总分
 - `latest.json`：最新分数和解释
 - `backtest_summary.json`：6 组因子方案的回测摘要
-- `report.html`：可视化报告
+- `report.html`：可视化报告，支持拖拽条和日期输入框联动控制图表区间
 - `static/echarts.min.js`：本地交互图表运行文件，报告不依赖外部 CDN
 
 ## 分数解释
