@@ -58,7 +58,7 @@ python nasdaq_bubble_index.py --offline-sample
 输出文件默认在 `output/`：
 
 - `bubble_history.csv`：每日因子与总分
-- `latest.json`：最新分数和解释
+- `latest.json`：最新分数、各因子本期采用的底层指标、数据来源和计算解释
 - `backtest_summary.json`：6 组因子方案的回测摘要
 - `report.html`：可视化报告，支持拖拽条和日期输入框联动控制图表区间
 - `static/echarts.min.js`：本地交互图表运行文件，报告不依赖外部 CDN
@@ -85,6 +85,7 @@ python nasdaq_bubble_index.py --offline-sample
 | 宏观/杠杆脆弱性 | `macro_fragility` | 26.6% | 10 年期美债、M2 同比和融资杠杆增速的均值 |
 
 所有底层单因子都先转成 20 年滚动历史分位数，再按分组聚合，最后按分组权重合成。若某个数据源缺失，工具会自动用剩余可用分组重新归一化权重。
+HTML 报告的因子卡会直接标出本期采用的底层指标；完整候选指标、数据来源和回退计算规则可在卡片内展开查看。
 
 ## 回测摘要
 

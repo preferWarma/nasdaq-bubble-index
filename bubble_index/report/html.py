@@ -62,15 +62,37 @@ def render_html_report(
         score_value = factor["score"]
         card_color = risk_label(float(score_value))[1] if score_value is not None else "#64748b"
         previous_score = format_score(factor.get("previous_score"))
+        active_inputs = factor.get("active_inputs") or []
+        active_input_chips = "".join(
+            f'<span class="factor-input-chip">{html.escape(str(item))}</span>'
+            for item in active_inputs
+        )
+        if not active_input_chips:
+            active_input_chips = '<span class="factor-input-empty">数据不足</span>'
+        candidate_text = " · ".join(str(item) for item in factor.get("input_candidates") or [])
         factor_cards.append(
             f"""
       <section class="factor">
-        <div class="factor-title">特征 {idx} · {html.escape(str(factor["name"]))}</div>
+        <div class="factor-head">
+          <div class="factor-title">特征 {idx} · {html.escape(str(factor["name"]))}</div>
+          <div class="factor-weight">权重 {float(factor["weight"]) * 100:.1f}%</div>
+        </div>
         <div class="factor-score" style="color:{card_color}">{score_value if score_value is not None else "NA"} 分</div>
         <div class="factor-previous">上一交易日分数：{html.escape(previous_score)} 分</div>
-        <div class="factor-weight">权重：{float(factor["weight"]) * 100:.1f}%</div>
         <div class="factor-value">当前值：{html.escape(str(factor["display_value"]))}</div>
-        <p>{html.escape(str(factor["reason"]))}</p>
+        <p class="factor-reason">{html.escape(str(factor["reason"]))}</p>
+        <div class="factor-inputs">
+          <span class="factor-input-label">本期采用</span>
+          <div class="factor-input-list">{active_input_chips}</div>
+        </div>
+        <details class="factor-method">
+          <summary>指标来源与计算规则</summary>
+          <div class="factor-method-body">
+            <div><strong>候选指标</strong><span>{html.escape(candidate_text)}</span></div>
+            <div><strong>数据来源</strong><span>{html.escape(str(factor.get("source_text") or ""))}</span></div>
+            <div><strong>计算方式</strong><span>{html.escape(str(factor.get("calculation_text") or ""))}</span></div>
+          </div>
+        </details>
       </section>
 """
         )
@@ -546,12 +568,90 @@ def render_html_report(
       border-radius: 8px;
       padding: 16px;
     }}
-    .factor-title {{ color: #334155; font-weight: 700; }}
+    .factor-head {{
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }}
+    .factor-title {{ color: #334155; font-weight: 800; }}
     .factor-score {{ margin-top: 12px; font-size: 32px; font-weight: 800; }}
     .factor-previous {{ margin-top: 2px; color: #64748b; font-size: 13px; font-weight: 800; }}
-    .factor-weight {{ margin-top: 2px; color: #475569; font-size: 13px; font-weight: 700; }}
+    .factor-weight {{
+      flex: 0 0 auto;
+      color: #475569;
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }}
     .factor-value {{ margin-top: 4px; color: #64748b; }}
-    .factor p {{ margin: 10px 0 0; line-height: 1.55; }}
+    .factor-reason {{ margin: 10px 0 0; line-height: 1.55; }}
+    .factor-inputs {{
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: start;
+      gap: 9px;
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid #edf1f5;
+    }}
+    .factor-input-label {{
+      padding-top: 3px;
+      color: #64748b;
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }}
+    .factor-input-list {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-width: 0;
+    }}
+    .factor-input-chip {{
+      border: 1px solid #dbe4ec;
+      border-radius: 6px;
+      background: #f8fafc;
+      color: #334155;
+      padding: 3px 7px;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.35;
+    }}
+    .factor-input-empty {{
+      color: #94a3b8;
+      font-size: 12px;
+      font-weight: 700;
+    }}
+    .factor-method {{
+      margin-top: 10px;
+      border-top: 1px solid #edf1f5;
+      color: #475569;
+    }}
+    .factor-method summary {{
+      padding: 10px 0 0;
+      color: #334155;
+      font-size: 13px;
+      font-weight: 800;
+      cursor: pointer;
+    }}
+    .factor-method summary::marker {{ color: #94a3b8; }}
+    .factor-method-body {{
+      display: grid;
+      gap: 8px;
+      margin-top: 10px;
+      padding: 11px 12px;
+      border-left: 3px solid #cbd5e1;
+      background: #f8fafc;
+      font-size: 12px;
+      line-height: 1.55;
+    }}
+    .factor-method-body div {{
+      display: grid;
+      grid-template-columns: 58px minmax(0, 1fr);
+      gap: 8px;
+    }}
+    .factor-method-body strong {{ color: #334155; }}
     .note {{
       margin-top: 22px;
       color: #64748b;
@@ -646,6 +746,10 @@ def render_html_report(
       }}
       .index-echart {{
         height: 380px;
+      }}
+      .factor-method-body div {{
+        grid-template-columns: 1fr;
+        gap: 2px;
       }}
     }}
   </style>

@@ -51,6 +51,73 @@ def previous_complete_row(data: pd.DataFrame) -> pd.Series | None:
     return complete.iloc[-2]
 
 
+def _available_inputs(
+    row: pd.Series, candidates: tuple[tuple[str, str], ...]
+) -> list[str]:
+    return [
+        label
+        for label, column in candidates
+        if column in row.index and not pd.isna(row.get(column))
+    ]
+
+
+def active_factor_inputs(row: pd.Series, factor: Factor) -> list[str]:
+    """Describe the bottom-level indicators used by the current factor score."""
+    if factor.key == "valuation":
+        direct_columns = (("PE", "nasdaq_pe"), ("PS", "nasdaq_ps"))
+        if any(column in row.index for _, column in direct_columns):
+            return _available_inputs(row, direct_columns)
+        return _available_inputs(
+            row,
+            (("Nasdaq / GDP", "nasdaq_to_gdp"), ("Nasdaq / M2", "nasdaq_to_m2")),
+        )
+    if factor.key == "trend_momentum":
+        return _available_inputs(
+            row,
+            (
+                ("偏离 200 日均线", "trend_score"),
+                ("过去一年涨幅", "return_score"),
+            ),
+        )
+    if factor.key == "style_crowding":
+        preferred = _available_inputs(row, (("QQQ / SPY 一年变化", "qqq_spy_score"),))
+        return preferred or _available_inputs(
+            row, (("Nasdaq / S&P 500 一年变化", "relative_score"),)
+        )
+    if factor.key == "concentration":
+        if "top10_weight" in row.index:
+            return _available_inputs(row, (("Top 10 权重", "concentration_score"),))
+        return _available_inputs(
+            row,
+            (
+                ("巨头篮子 / QQQ", "mega_cap_relative"),
+                ("巨头篮子 / QQQ 一年变化", "mega_cap_relative_1y"),
+            ),
+        )
+    if factor.key == "sentiment_speculation":
+        inputs = _available_inputs(row, (("VIX 低波动", "complacency_score"),))
+        if "equity_put_call" in row.index:
+            return _available_inputs(row, (("股票 Put/Call", "speculation_score"),)) + inputs
+        return _available_inputs(
+            row,
+            (
+                ("QQQ 成交量强度", "qqq_volume_intensity"),
+                ("ARKK / QQQ", "arkk_qqq"),
+                ("ARKK / QQQ 一年变化", "arkk_qqq_1y"),
+            ),
+        ) + inputs
+    if factor.key == "macro_fragility":
+        return _available_inputs(
+            row,
+            (
+                ("10 年期美债收益率", "rate_pressure_score"),
+                ("M2 同比", "liquidity_score"),
+                ("融资余额同比", "margin_score"),
+            ),
+        )
+    return []
+
+
 def build_summary(
     latest: pd.Series, factors: list[Factor], previous: pd.Series | None = None
 ) -> dict[str, object]:
@@ -79,6 +146,10 @@ def build_summary(
                 if pd.isna(previous_score)
                 else round(float(previous_score), 1),
                 "reason": factor_reason(factor, score),
+                "active_inputs": active_factor_inputs(latest, factor),
+                "input_candidates": list(factor.input_candidates),
+                "source_text": factor.source_text,
+                "calculation_text": factor.calculation_text,
             }
         )
     return {
